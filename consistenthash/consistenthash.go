@@ -30,12 +30,12 @@ func New(replicas int, fn Hash) *Map {
 }
 
 // Add 添加节点
-func (m *Map) Add(keys ...string) {
-	for _, key := range keys {
+func (m *Map) Add(nodes ...string) {
+	for _, node := range nodes {
 		for i := 0; i < m.replicas; i++ {
-			hash := int(m.hash([]byte(key + ":" + strconv.Itoa(i)))) // 节点A-1 节点A-2
-			m.keys = append(m.keys, hash)
-			m.hashMap[hash] = key
+			hashedNode := int(m.hash([]byte(strconv.Itoa(i) + node)))
+			m.keys = append(m.keys, hashedNode)
+			m.hashMap[hashedNode] = node
 		}
 	}
 	// 对keys进行排序，便于Get方法进行二分查找
@@ -47,10 +47,11 @@ func (m *Map) Get(key string) string {
 		return ""
 	}
 	hash := int(m.hash([]byte(key)))
-	// 二分查找
+	// 二分查找，没有找到返回n [0, n)，不是返回-1
 	idx := sort.Search(len(m.keys), func(i int) bool {
 		return m.keys[i] >= hash
 	})
 
+	// 如果 idx == len(m.keys)，说明应选择 m.keys[0]，因为 m.keys 是一个环状结构，所以用取余数的方式来处理这种情况。
 	return m.hashMap[m.keys[idx%len(m.keys)]]
 }
