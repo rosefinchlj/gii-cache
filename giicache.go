@@ -21,6 +21,7 @@ type Group struct {
 	name      string
 	mainCache cache
 	getter    Getter
+	peer      PeerPicker
 }
 
 var (
@@ -66,7 +67,17 @@ func (g *Group) Get(key string) (ByteView, error) {
 	return g.load(key)
 }
 
+// 本地不存在，从远程节点获取
 func (g *Group) load(key string) (ByteView, error) {
+	if g.peer != nil {
+		if peer, ok := g.peer.PickPeer(key); ok {
+			if value, err := g.getFromPeer(peer, key); err == nil {
+				return value, nil
+			}
+			log.Println("[Group] Failed to get from peer")
+		}
+	}
+
 	return g.getLocally(key)
 }
 
@@ -84,4 +95,21 @@ func (g *Group) getLocally(key string) (ByteView, error) {
 
 func (g *Group) populateCache(key string, value ByteView) {
 	g.mainCache.add(key, value)
+}
+
+func (g *Group) RegisterPeers(peer PeerPicker) {
+	if g.peer != nil {
+		panic("RegisterPeerPicker called more than once")
+	}
+
+	g.peer = peer
+}
+
+func (g *Group) getFromPeer(peer PeerGetter, key string) (ByteView, error) {
+	bytes, err := peer.Get(g.name, key)
+	if err != nil {
+		return ByteView{}, err
+	}
+
+	return ByteView{b: bytes}, nil
 }

@@ -2,16 +2,58 @@ package giicache
 
 import (
 	"fmt"
+	"github.com/gii-cache/consistenthash"
+	"io/ioutil"
 	"log"
 	"net/http"
+	url2 "net/url"
 	"strings"
+	"sync"
 )
 
-const defaultBasePath = "/_giicache/"
+const (
+	defaultBasePath = "/_giicache/"
+	defaultReplicas = 50
+)
+
+var (
+	// 通过编译器来检测httpGetter是否实现了PeerGetter接口
+	_ PeerGetter = (*httpGetter)(nil)
+	_ PeerPicker = (*HTTPPool)(nil)
+)
+
+type httpGetter struct {
+	baseURL string
+}
+
+func (h *httpGetter) Get(groupName, key string) ([]byte, error) {
+	url := fmt.Sprintf("%s/%s/%s", h.baseURL, url2.QueryEscape(groupName), url2.QueryEscape(key))
+	res, err := http.Get(url)
+	if err != nil {
+		return nil, err
+	}
+	defer res.Body.Close()
+
+	if res.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("server returned: %s", res.Status)
+	}
+
+	bytes, err := ioutil.ReadAll(res.Body)
+	if err != nil {
+		return nil, fmt.Errorf("reading response body: %s", err)
+	}
+
+	return bytes, nil
+
+}
 
 type HTTPPool struct {
-	basePath string
-	self     string
+	sync.Mutex
+
+	basePath   string
+	self       string
+	peers      *consistenthash.Map
+	httpGetter map[string]*httpGetter // keyed by e.g. "http://10.0.0.2:8008"
 }
 
 func NewHTTPPool(self string) *HTTPPool {
@@ -55,4 +97,28 @@ func (h HTTPPool) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/octet-stream")
 	w.Write(view.ByteSlice())
+}
+
+func (h *HTTPPool) Set(peers ...string) {
+	h.Lock()
+	defer h.Unlock()
+
+	h.peers = consistenthash.New(defaultReplicas, nil)
+	h.peers.Add(peers...)
+	h.httpGetter = make(map[string]*httpGetter, len(peers))
+	for _, peer := range peers {
+		h.httpGetter[peer] = &httpGetter{baseURL: peer + h.basePath}
+	}
+}
+
+func (h *HTTPPool) PickPeer(key string) (PeerGetter, bool) {
+	h.Lock()
+	defer h.Unlock()
+
+	if peer := h.peers.Get(key); peer != "" && peer != h.self {
+		h.Log("Pick peer %s", peer)
+		return h.httpGetter[peer], true
+	}
+
+	return nil, false
 }

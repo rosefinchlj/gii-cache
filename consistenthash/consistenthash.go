@@ -10,7 +10,7 @@ type Hash func(data []byte) uint32
 
 // Map 包含所有节点的hash值
 type Map struct {
-	hash     Hash
+	hashFun  Hash
 	replicas int            // 虚拟节点数
 	keys     []int          // 哈希环上所有的key  Sorted
 	hashMap  map[int]string // 虚拟节点与真是节点的映射
@@ -19,12 +19,12 @@ type Map struct {
 func New(replicas int, fn Hash) *Map {
 	m := &Map{
 		replicas: replicas,
-		hash:     fn,
+		hashFun:  fn,
 		hashMap:  make(map[int]string),
 	}
 
-	if m.hash == nil {
-		m.hash = crc32.ChecksumIEEE
+	if m.hashFun == nil {
+		m.hashFun = crc32.ChecksumIEEE
 	}
 	return m
 }
@@ -33,7 +33,7 @@ func New(replicas int, fn Hash) *Map {
 func (m *Map) Add(nodes ...string) {
 	for _, node := range nodes {
 		for i := 0; i < m.replicas; i++ {
-			hashedNode := int(m.hash([]byte(strconv.Itoa(i) + node)))
+			hashedNode := int(m.hashFun([]byte(strconv.Itoa(i) + node)))
 			m.keys = append(m.keys, hashedNode)
 			m.hashMap[hashedNode] = node
 		}
@@ -46,7 +46,7 @@ func (m *Map) Get(key string) string {
 	if len(m.keys) == 0 {
 		return ""
 	}
-	hash := int(m.hash([]byte(key)))
+	hash := int(m.hashFun([]byte(key)))
 	// 二分查找，没有找到返回n [0, n)，不是返回-1
 	idx := sort.Search(len(m.keys), func(i int) bool {
 		return m.keys[i] >= hash
