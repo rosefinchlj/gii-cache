@@ -2,6 +2,7 @@ package giicache
 
 import (
 	"errors"
+	"github.com/gii-cache/singleflight"
 	"log"
 	"sync"
 )
@@ -22,6 +23,7 @@ type Group struct {
 	mainCache cache
 	getter    Getter
 	peer      PeerPicker
+	loader    *singleflight.Group
 }
 
 var (
@@ -40,6 +42,7 @@ func NewGroup(name string, cacheBytes int64, getter Getter) *Group {
 		name:      name,
 		mainCache: cache{cacheBytes: cacheBytes},
 		getter:    getter,
+		loader:    &singleflight.Group{},
 	}
 
 	groups[name] = g
@@ -68,17 +71,25 @@ func (g *Group) Get(key string) (ByteView, error) {
 }
 
 // 本地不存在，从远程节点获取
-func (g *Group) load(key string) (ByteView, error) {
-	if g.peer != nil {
-		if peer, ok := g.peer.PickPeer(key); ok {
-			if value, err := g.getFromPeer(peer, key); err == nil {
-				return value, nil
+func (g *Group) load(key string) (value ByteView, err error) {
+	done, err := g.loader.Do(key, func() (interface{}, error) {
+		if g.peer != nil {
+			if peer, ok := g.peer.PickPeer(key); ok {
+				if value, err := g.getFromPeer(peer, key); err == nil {
+					return value, nil
+				}
+				log.Println("[Group] Failed to get from peer")
 			}
-			log.Println("[Group] Failed to get from peer")
 		}
+
+		return g.getLocally(key)
+	})
+
+	if err == nil {
+		return done.(ByteView), nil
 	}
 
-	return g.getLocally(key)
+	return
 }
 
 func (g *Group) getLocally(key string) (ByteView, error) {
